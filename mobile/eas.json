@@ -1,0 +1,29 @@
+{
+  "cli": {
+    "version": ">= 18.11.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://rpcpoczwgishuywxpgpl.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwY3BvY3p3Z2lzaHV5d3hwZ3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MzU4MTQsImV4cCI6MjA5MzMxMTgxNH0.AdWm4OqFf_yfkQQuloMD17oRh9DReVOJ2lHPj7Xo_XI",
+        "EXPO_PUBLIC_API_URL": "https://swift-money.vercel.app"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

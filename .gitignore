@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# E2E test scratch (Playwright accessibility snapshots — may contain real data)
+.playwright-mcp/
+# local Supabase/agent scratch
+*.output

@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Swift Money Transfer App
 
-## Getting Started
+Three-role money flow for distributors, field officers (FOS), and retailers.
 
-First, run the development server:
+- **Retailer** requests money → **FOS** accepts / edits / declines → **Distributor** approves.
+- **Distributor** uploads end-of-day sheet (transfers + reversals) — *the only thing that moves outstanding*.
+- **Retailer / FOS** report cash given back → **Distributor** approves → reduces outstanding.
+- Outstanding sheet: `Opening + Transferred − Reversed − Cash = Closing`. Per retailer, daily.
+
+## Stack
+
+- Next.js 16 (App Router) + React 19 + Tailwind v4
+- Supabase (Postgres, Auth, Storage, RLS) — server- and browser-side via `@supabase/ssr`
+- Zod, react-hook-form, date-fns
+- Mobile (Expo) deferred to Phase 3
+
+## Getting started
 
 ```bash
+# 1. Install
+npm install
+
+# 2. Spin up Supabase (see supabase/README.md for details)
+brew install supabase/tap/supabase    # one-time
+supabase init                          # one-time
+supabase start
+supabase db reset                      # applies migrations
+
+# 3. Env
+cp .env.local.example .env.local
+# paste URL + anon + service-role keys printed by `supabase start`
+
+# 4. Bootstrap a distributor
+# — see supabase/README.md "Bootstrapping the first distributor"
+
+# 5. Run
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 and sign in.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+src/
+  app/
+    (authed)/                  # protected route group (sidebar shell)
+      distributor/             # distributor home
+      fos/                     # FOS home
+      retailer/                # retailer home
+      layout.tsx
+    login/                     # login page + server action
+    layout.tsx                 # root layout
+    page.tsx                   # role-aware redirect
+  lib/
+    supabase/
+      server.ts                # createServerClient (SSR)
+      client.ts                # createBrowserClient
+      admin.ts                 # service-role (Server Actions only)
+    auth.ts                    # requireProfile / requireRole helpers
+    types.ts                   # role + status enums
+    utils.ts                   # cn(), formatINR()
+proxy.ts                       # auth gate (Next.js 16 file convention)
+supabase/
+  migrations/                  # SQL: schema → RLS → balance fns
+  seed.sql                     # manual examples
+  README.md                    # local + hosted setup
+```
 
-## Learn More
+## Build phases
 
-To learn more about Next.js, take a look at the following resources:
+See [`tasks/todo.md`](./tasks/todo.md) for the full phased plan and check-state.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Phase 1** (this commit): schema + RLS + balance fn, auth, role-aware shells.
+- **Phase 2**: workflows — request/approval flows, EOD upload + parser, outstanding sheet.
+- **Phase 3**: mobile (Expo), notifications, exports, audit log.

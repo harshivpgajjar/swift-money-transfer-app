@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "685079353189",
+    "project_id": "swiftmoneytransfer-48e82",
+    "storage_bucket": "swiftmoneytransfer-48e82.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:685079353189:android:0fad92c6b47c46520e738c",
+        "android_client_info": {
+          "package_name": "com.harshivpgajjar.swiftmoneytransfer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxcyjgtbJHHAlsrMbShKrHH3oySFvpbNM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

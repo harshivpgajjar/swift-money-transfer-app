@@ -1,0 +1,4 @@
+mobile
+.playwright-mcp
+supabase/.temp
+*.log

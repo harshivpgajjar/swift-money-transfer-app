@@ -1,0 +1,17 @@
+-- Seed (manual): run AFTER you've created the auth.users via Supabase dashboard or admin API.
+-- Replace the UUIDs below with real auth.users IDs you minted.
+
+-- Example only — do not run as-is.
+--
+-- insert into public.profiles (id, role, full_name, distributor_id) values
+--   ('00000000-0000-0000-0000-000000000001', 'distributor', 'Demo Distributor',
+--    '00000000-0000-0000-0000-000000000001');
+--
+-- insert into public.profiles (id, role, full_name, distributor_id) values
+--   ('00000000-0000-0000-0000-000000000002', 'fos', 'Demo FOS',
+--    '00000000-0000-0000-0000-000000000001');
+--
+-- insert into public.profiles (id, role, full_name, retailer_code, fos_id, distributor_id) values
+--   ('00000000-0000-0000-0000-000000000003', 'retailer', 'Demo Retailer', 'R001',
+--    '00000000-0000-0000-0000-000000000002',
+--    '00000000-0000-0000-0000-000000000001');
