@@ -88,6 +88,10 @@ export async function processCashReportUpload(
   for (const a of aliases ?? []) {
     byName.set(normName(a.alias), a.retailer_id);
     byFuzz.set(fuzzKey(a.alias), a.retailer_id);
+    // A 10-digit alias is a SECONDARY phone — a shop with two portal numbers
+    // (A2Z vs Swift) resolves to one profile instead of re-creating per portal.
+    const digits = a.alias.replace(/\D/g, "");
+    if (digits.length === 10 && !phoneToId.has(digits)) phoneToId.set(digits, a.retailer_id);
   }
   // exact (incl. aliases) → punctuation/spacing-insensitive → unique containment
   const resolveByName = (raw: string): string | undefined => {

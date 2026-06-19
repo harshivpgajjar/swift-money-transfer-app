@@ -244,6 +244,22 @@ export async function parseCashWorkbooks(
     };
   }
 
+  // A cash column should normally be today or yesterday. Anything else (e.g. a
+  // wrong-year typo like 14.06.2025) is imported but flagged loudly — it's a
+  // valid past date so it isn't rejected, but it's almost always a mistake.
+  const yest = new Date(`${todayIst}T00:00:00Z`);
+  yest.setUTCDate(yest.getUTCDate() - 1);
+  const yesterdayIst = yest.toISOString().slice(0, 10);
+  const oddDates = [...new Set(entries.map((e) => e.txn_date))]
+    .filter((d) => d !== todayIst && d !== yesterdayIst)
+    .sort();
+  for (const d of oddDates) {
+    const sheets = [...new Set(entries.filter((e) => e.txn_date === d).map((e) => e.sheet_name.trim()))].join(", ");
+    warnings.push(
+      `Date ${d} (${sheets}) is not today (${todayIst}) or yesterday — check the column header for a typo (wrong year/month?). It was imported on that date.`,
+    );
+  }
+
   return { ok: true, entries, sheets_processed: processed, missing_sheets: missing, warnings };
 }
 

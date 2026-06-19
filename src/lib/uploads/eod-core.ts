@@ -165,6 +165,11 @@ async function processEodParsed(
   for (const a of aliases ?? []) {
     byName.set(normName(a.alias), a.retailer_id);
     byFuzz.set(fuzzKey(a.alias), a.retailer_id);
+    // A 10-digit alias is a SECONDARY phone for that retailer — register it so a
+    // shop with two portal numbers (e.g. A2Z 7226806846 + Swift 8107128780)
+    // resolves to one profile instead of being re-created per portal.
+    const digits = a.alias.replace(/\D/g, "");
+    if (digits.length === 10) byPhone.set(digits, a.retailer_id);
   }
 
   /* Name resolution: exact (incl. aliases) → exact ignoring punctuation/spacing

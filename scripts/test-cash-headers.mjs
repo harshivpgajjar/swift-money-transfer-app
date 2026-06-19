@@ -82,9 +82,11 @@ try {
   const sum = body.summary;
   check("rows", sum.rows, 5); // 2× 10-Jun HT + alias row + 1× 28-Feb HT + 1× PT
   check("covered dates", sum.covered_dates, ["2026-02-28", "2026-06-10"]); // month-name + D/M + US M/D all → real dates
-  check("warnings count", (sum.warnings ?? []).length, 2);
   check("warning names the column", (sum.warnings ?? []).some((w) => /HT CASH/.test(w)), true);
   check("warning names unmatched row", (sum.warnings ?? []).some((w) => /NEW SHOP NO PHONE/.test(w)), true);
+  // 10-Jun / 28-Feb columns are neither today nor yesterday → odd-date warnings
+  check("warns on non-recent date 2026-06-10", (sum.warnings ?? []).some((w) => /2026-06-10.*not today/.test(w)), true);
+  check("warns on non-recent date 2026-02-28", (sum.warnings ?? []).some((w) => /2026-02-28.*not today/.test(w)), true);
   // entries landed on the right dates
   const { data: entries } = await admin
     .from("cash_report_entries").select("txn_date, amount, sheet_name, retailer_id")
