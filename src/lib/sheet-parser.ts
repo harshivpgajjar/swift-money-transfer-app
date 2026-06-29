@@ -12,6 +12,10 @@ export type ParseResult =
       /* Set when the file format itself identifies the account
          (HT/PT portal exports → swift, A2Z PaymentReports → naomi). */
       detected_account?: "swift" | "naomi";
+      /* Set when the format identifies the portal: HT-A/HT-B exports → "HT".
+         PT/Report-format files are ambiguous (a 3rd HT export uses PT format),
+         so they stay undefined and the uploader picks. naomi has no portal. */
+      detected_portal?: "HT" | "PT";
       /* Rows intentionally not imported (e.g. A2Z wallet top-ups). */
       skipped?: RowError[];
     }
@@ -126,7 +130,14 @@ export async function parseEodFile(
     if (ignored > 0) {
       skipped.push({ row: 0, message: `${ignored} non-retailer rows ignored (wallet/other entries)` });
     }
-    return { ok: true, rows, detected_account: isA2z ? "naomi" : "swift", skipped };
+    return {
+      ok: true,
+      rows,
+      detected_account: isA2z ? "naomi" : "swift",
+      // HT-A and HT-B are HT exports; A2Z has no portal.
+      detected_portal: isA2z ? undefined : "HT",
+      skipped,
+    };
   }
 
   if (!isSimple && !isReport) {

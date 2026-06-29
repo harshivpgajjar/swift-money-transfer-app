@@ -11,6 +11,8 @@ export async function uploadEod(formData: FormData): Promise<EodResult> {
   const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
   const accountId = formData.get("account_id");
   const driveLinks = String(formData.get("drive_links") ?? "").trim();
+  const rp = formData.get("report_portal");
+  const reportPortal = rp === "HT" || rp === "PT" ? rp : undefined;
   if (driveLinks) {
     const fetched = await fetchDriveFiles(driveLinks);
     if (!Array.isArray(fetched)) {
@@ -27,7 +29,7 @@ export async function uploadEod(formData: FormData): Promise<EodResult> {
 
   let result: EodResult;
   try {
-    result = await processEodUploads(distributor.id, accountId, files);
+    result = await processEodUploads(distributor.id, accountId, files, reportPortal);
   } catch (e) {
     return {
       ok: false,

@@ -30,6 +30,9 @@ export async function processEodUploads(
   distributorId: string,
   defaultAccountId: string,
   files: File[],
+  // Portal for swift Report/PT-format files (format alone can't tell PT from a
+  // 3rd HT export). HT-A/HT-B files auto-detect "HT" and ignore this.
+  reportPortal?: "HT" | "PT",
 ): Promise<EodResult> {
   const merged = {
     rows: 0,
@@ -54,7 +57,10 @@ export async function processEodUploads(
     // Account priority: format-detected → filename → form selection.
     const slug = parsed.detected_account ?? accountFromFilename(file.name);
     const accountId = (slug ? await accountIdForSlug(distributorId, slug) : null) ?? defaultAccountId;
-    const res = await processEodParsed(distributorId, accountId, file.name, parsed);
+    // Portal: format-detected ("HT" for HT-A/HT-B) → uploader's choice for swift
+    // Report/PT files → null (A2Z has no portal).
+    const portal = parsed.detected_portal ?? (slug === "swift" ? reportPortal : undefined);
+    const res = await processEodParsed(distributorId, accountId, file.name, parsed, portal);
     if (!res.ok) {
       for (const e of res.errors) {
         errors.push({ ...e, message: prefix ? `${file.name}: ${e.message}` : e.message });
@@ -98,10 +104,13 @@ export async function processEodUpload(
   distributorId: string,
   accountId: string,
   file: File,
+  reportPortal?: "HT" | "PT",
 ): Promise<EodResult> {
   const parsed = await parseEodFile(file, todayIso());
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
-  return processEodParsed(distributorId, accountId, file.name, parsed);
+  // Format-detected portal ("HT" for HT-A/HT-B), else the caller's choice.
+  const portal = parsed.detected_portal ?? reportPortal;
+  return processEodParsed(distributorId, accountId, file.name, parsed, portal);
 }
 
 async function processEodParsed(
@@ -109,6 +118,7 @@ async function processEodParsed(
   accountId: string,
   filename: string,
   parsed: Extract<Awaited<ReturnType<typeof parseEodFile>>, { ok: true }>,
+  portal: "HT" | "PT" | undefined,
 ): Promise<EodResult> {
   const distributor = { id: distributorId };
   const today = todayIso();
@@ -358,6 +368,7 @@ async function processEodParsed(
       row_count: final.length,
       total_transferred: totals.transferred,
       total_reversed: totals.reversed,
+      portal: portal ?? null,
     })
     .select("id")
     .single();

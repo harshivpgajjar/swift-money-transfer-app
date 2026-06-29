@@ -34,9 +34,11 @@ function EodUpload({ accounts }: { accounts: AccountOpt[] }) {
   const [account, setAccount] = useState(accounts[0]?.id ?? "");
   const [files, setFiles] = useState<File[]>([]);
   const [driveLinks, setDriveLinks] = useState("");
+  const [reportPortal, setReportPortal] = useState<"HT" | "PT">("PT");
   const [err, setErr] = useState("");
   const [result, setResult] = useState<EodResult | null>(null);
   const [busy, start] = useTransition();
+  const accSlug = accounts.find((a) => a.id === account)?.slug;
 
   const importSheet = () => {
     setErr("");
@@ -51,6 +53,7 @@ function EodUpload({ accounts }: { accounts: AccountOpt[] }) {
     start(async () => {
       const fd = new FormData();
       fd.set("account_id", account);
+      if (accSlug === "swift") fd.set("report_portal", reportPortal);
       for (const f of files) fd.append("file", f);
       if (driveLinks.trim()) fd.set("drive_links", driveLinks);
       const r = await uploadEod(fd);
@@ -73,6 +76,21 @@ function EodUpload({ accounts }: { accounts: AccountOpt[] }) {
         value={account}
         onChange={setAccount}
       />
+      {accSlug === "swift" && (
+        <>
+          <div className="field-label" style={{ marginLeft: 3, marginTop: 10 }}>
+            {t("reports.portal")}
+          </div>
+          <Segmented
+            options={[
+              { value: "PT", label: "PT" },
+              { value: "HT", label: "HT" },
+            ]}
+            value={reportPortal}
+            onChange={(v) => setReportPortal(v as "HT" | "PT")}
+          />
+        </>
+      )}
       <div className="spacer" />
       <SectionLabel style={{ marginTop: 6 }}>{t("reports.upload_pemo")}</SectionLabel>
       <FileDrop
