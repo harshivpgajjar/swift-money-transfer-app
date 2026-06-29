@@ -111,12 +111,13 @@ export default function DistributorHome() {
     fos: 0,
     needsAssignment: 0,
     outstanding: 0,
+    personal: 0,
   });
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
 
   const load = useCallback(async () => {
     if (!profile) return;
-    const [pr, pc, rc, fc, na, balances, an] = await Promise.all([
+    const [pr, pc, rc, fc, na, outRes, personalRes, an] = await Promise.all([
       supabase
         .from("money_requests")
         .select("id", { count: "exact", head: true })
@@ -132,7 +133,8 @@ export default function DistributorHome() {
         .from("profiles")
         .select("id", { count: "exact", head: true })
         .eq("distributor_id", profile.id)
-        .eq("role", "retailer"),
+        .eq("role", "retailer")
+        .eq("excluded", false),
       supabase
         .from("profiles")
         .select("id", { count: "exact", head: true })
@@ -144,20 +146,12 @@ export default function DistributorHome() {
         .eq("distributor_id", profile.id)
         .eq("role", "retailer")
         .eq("needs_assignment", true),
-      supabase
-        .from("daily_balances")
-        .select("retailer_id, account_id, balance_date, closing")
-        .order("balance_date", { ascending: false }),
+      // Server-side latest-balance sum — immune to the 1000-row fetch cap.
+      supabase.rpc("org_outstanding", { p_distributor: profile.id }),
+      supabase.rpc("org_personal_outstanding", { p_distributor: profile.id }),
       fetchAnalytics(),
     ]);
-    const seen = new Set<string>();
-    let total = 0;
-    for (const b of balances.data ?? []) {
-      const key = `${b.retailer_id}|${b.account_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      total += Number(b.closing);
-    }
+    const total = Number(outRes.data ?? 0);
     setStats({
       pendingReq: pr.count ?? 0,
       pendingCash: pc.count ?? 0,
@@ -165,6 +159,7 @@ export default function DistributorHome() {
       fos: fc.count ?? 0,
       needsAssignment: na.count ?? 0,
       outstanding: total,
+      personal: Number(personalRes.data ?? 0),
     });
     setAnalytics(an);
   }, [profile]);
@@ -286,6 +281,18 @@ export default function DistributorHome() {
         >
           {formatINR(stats.outstanding)}
         </Text>
+        {stats.personal !== 0 ? (
+          <Text
+            style={{
+              fontFamily: font(500, locale),
+              fontSize: 12.5,
+              color: TH.ink3,
+              marginTop: 4,
+            }}
+          >
+            {t("out.personal")}: {formatINR(stats.personal)}
+          </Text>
+        ) : null}
       </View>
 
       {/* 5 tiles in a 2-column grid */}

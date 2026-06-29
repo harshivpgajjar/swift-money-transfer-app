@@ -2,6 +2,38 @@ import { supabase } from "./supabase";
 
 type Result = { ok: true } | { error: string };
 
+/* FOS raises a balance request for a retailer. The insert is privileged (no FOS
+   RLS insert policy), so this goes through the server API route which validates
+   and posts it auto-approved. */
+export async function fosRequestBalance(args: {
+  retailerId: string;
+  accountId: string;
+  amount: number;
+  notes?: string;
+}): Promise<Result> {
+  const base = process.env.EXPO_PUBLIC_API_URL;
+  if (!base) return { error: "EXPO_PUBLIC_API_URL is not set" };
+  const token = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!token) return { error: "Not signed in" };
+  try {
+    const res = await fetch(`${base}/api/fos/request-balance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        retailer_id: args.retailerId,
+        account_id: args.accountId,
+        amount: args.amount,
+        notes: args.notes,
+      }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: json.error || "Request failed" };
+    return { ok: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Network error" };
+  }
+}
+
 export async function createMoneyRequest(args: {
   retailerId: string;
   fosId: string;

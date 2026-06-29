@@ -49,6 +49,14 @@ export const NewMoneyRequestSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
+// FOS raises a balance/transfer request for one of their retailers (auto-approved).
+export const FosBalanceRequestSchema = z.object({
+  retailer_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  amount: positiveAmount,
+  notes: z.string().max(500).optional(),
+});
+
 export const FosReviewSchema = z.object({
   request_id: z.string().uuid(),
   decision: z.enum(["accept", "edit", "decline"]),
@@ -96,6 +104,10 @@ export const EodRowSchema = z
     type: z.enum(["transfer", "reversal"]),
     amount: positiveAmount,
     txn_date: isoDate,
+    // Full transaction timestamp (IST) when the export carries a time component;
+    // used for the intraday "by 3 PM" action signal. Optional — date-only files
+    // leave it unset and are treated as in-window.
+    txn_at: z.string().datetime({ offset: true }).optional(),
     bank_reference: z.string().max(120).optional(),
     notes: z.string().max(500).optional(),
   })

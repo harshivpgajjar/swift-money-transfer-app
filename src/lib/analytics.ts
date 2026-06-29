@@ -65,14 +65,36 @@ function istDate(d: Date): string {
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
 }
 
-export async function getDistributorAnalytics(distributorId: string): Promise<AnalyticsData> {
+/* Fetch every row, paging past the PostgREST 1000-row cap. */
+async function fetchAllRows<T>(
+  make: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+): Promise<T[]> {
+  const all: T[] = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await make(from, from + size - 1);
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < size) break;
+  }
+  return all;
+}
+
+/* When `fosId` is given, every metric is scoped to that FOS's own retailers
+   (FOS-facing dashboard). The org-only sections (per-FOS scorecards, EOD
+   reconciliation) are blanked since they aren't meaningful for a single FOS. */
+export async function getDistributorAnalytics(
+  distributorId: string,
+  fosId?: string,
+): Promise<AnalyticsData> {
   const admin = createAdminClient();
   const now = new Date();
   const today = istDate(now);
   const yesterday = istDate(new Date(now.getTime() - 86400e3));
   const d30 = istDate(new Date(now.getTime() - 30 * 86400e3));
 
-  const [accountsRes, profilesRes, requestsRes, cashRes, balancesRes, eodRes, bookRes] =
+  const [accountsRes, profilesRes, requestsRes, cashRes, bookRes, balancesAll, eodAll] =
     await Promise.all([
       admin
         .from("accounts")
@@ -82,7 +104,7 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
         .order("display_order"),
       admin
         .from("profiles")
-        .select("id, full_name, retailer_code, role, fos_id, active, must_change_password")
+        .select("id, full_name, retailer_code, role, fos_id, active, must_change_password, excluded, personal")
         .eq("distributor_id", distributorId),
       admin
         .from("money_requests")
@@ -95,29 +117,39 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
         .select("retailer_id, account_id, amount, approved_amount, status, txn_date, created_at, approved_at, submitted_by")
         .eq("distributor_id", distributorId),
       admin
-        .from("daily_balances")
-        .select("retailer_id, account_id, balance_date, closing, transferred, reversed, cash_received")
-        .order("balance_date", { ascending: true }),
-      admin
-        .from("eod_transactions")
-        .select("retailer_id, account_id, type, amount, txn_date")
-        .eq("distributor_id", distributorId),
-      admin
         .from("cash_report_entries")
         .select("retailer_id, account_id, txn_date, amount"),
+      // daily_balances & eod_transactions can exceed 1000 rows — page through both.
+      fetchAllRows((from, to) =>
+        admin
+          .from("daily_balances")
+          .select("retailer_id, account_id, balance_date, closing, transferred, reversed, cash_received")
+          .order("balance_date", { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows((from, to) =>
+        admin
+          .from("eod_transactions")
+          .select("retailer_id, account_id, type, amount, txn_date")
+          .eq("distributor_id", distributorId)
+          .range(from, to),
+      ),
     ]);
 
   const accounts = accountsRes.data ?? [];
   const accountIds = new Set(accounts.map((a) => a.id));
   const profiles = profilesRes.data ?? [];
-  const retailers = profiles.filter((p) => p.role === "retailer");
+  // Scope to one FOS's retailers when fosId is set; otherwise all retailers.
+  const retailers = profiles.filter(
+    (p) => p.role === "retailer" && !p.excluded && !p.personal && (!fosId || p.fos_id === fosId),
+  );
   const fosList = profiles.filter((p) => p.role === "fos");
   const retailerById = new Map(retailers.map((r) => [r.id, r]));
   const fosById = new Map(fosList.map((f) => [f.id, f]));
   const requests = requestsRes.data ?? [];
   const cash = cashRes.data ?? [];
-  const balances = (balancesRes.data ?? []).filter((b) => accountIds.has(b.account_id));
-  const eod = eodRes.data ?? [];
+  const balances = balancesAll.filter((b) => accountIds.has(b.account_id));
+  const eod = eodAll;
   const book = (bookRes.data ?? []).filter((b) => accountIds.has(b.account_id));
 
   const reqAmount = (r: (typeof requests)[number]) =>
@@ -386,7 +418,10 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
   const dayMs = 86400e3;
   const staleRequests = requests
     .filter(
-      (r) => r.fos_status === "pending" && now.getTime() - new Date(r.created_at).getTime() > dayMs,
+      (r) =>
+        r.fos_status === "pending" &&
+        retailerById.has(r.retailer_id) &&
+        now.getTime() - new Date(r.created_at).getTime() > dayMs,
     )
     .map((r) => ({
       retailer: retailerById.get(r.retailer_id)?.full_name ?? "?",
@@ -398,7 +433,10 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
     .slice(0, 6);
   const staleCash = cash
     .filter(
-      (c) => c.status === "pending" && now.getTime() - new Date(c.created_at).getTime() > dayMs,
+      (c) =>
+        c.status === "pending" &&
+        retailerById.has(c.retailer_id) &&
+        now.getTime() - new Date(c.created_at).getTime() > dayMs,
     )
     .map((c) => ({
       retailer: retailerById.get(c.retailer_id)?.full_name ?? "?",
@@ -408,11 +446,13 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
     .sort((a, b) => b.hours - a.hours)
     .slice(0, 6);
 
+  // Payment recency from the ledger cash (cash book / EOD), not cash_submissions —
+  // this distributor records collections there, so the in-app flow is near-empty.
   const lastPayment = new Map<string, string>();
-  for (const c of cash) {
-    if (c.status !== "approved") continue;
-    const prev = lastPayment.get(c.retailer_id);
-    if (!prev || c.txn_date > prev) lastPayment.set(c.retailer_id, c.txn_date);
+  for (const b of balances) {
+    if (Number(b.cash_received) <= 0) continue;
+    const prev = lastPayment.get(b.retailer_id);
+    if (!prev || b.balance_date > prev) lastPayment.set(b.retailer_id, b.balance_date);
   }
   const d14 = istDate(new Date(now.getTime() - 14 * dayMs));
   const noPayment14d = retailers
@@ -496,13 +536,16 @@ export async function getDistributorAnalytics(distributorId: string): Promise<An
       topOverdue,
     },
     slowPayers,
-    fos: fosCards,
-    recon: {
-      matched: diffPairs === 0 && unmatchedEod === 0,
-      diffAmount: Math.round(diffAmount),
-      diffPairs,
-      unmatchedEod,
-    },
+    // Org-only sections are blanked for a single-FOS view.
+    fos: fosId ? [] : fosCards,
+    recon: fosId
+      ? { matched: true, diffAmount: 0, diffPairs: 0, unmatchedEod: 0 }
+      : {
+          matched: diffPairs === 0 && unmatchedEod === 0,
+          diffAmount: Math.round(diffAmount),
+          diffPairs,
+          unmatchedEod,
+        },
     appUsage,
     alerts: { staleRequests, staleCash, noPayment14d, neverLoggedIn },
     discrepancies: { requests: reqDiscrepancies, cash: cashDiscrepancies },

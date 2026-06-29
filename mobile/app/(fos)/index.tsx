@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Wallet, Inbox, Users, Settings } from "lucide-react-native";
+import { Wallet, Inbox, Users, Settings, AlertTriangle } from "lucide-react-native";
+import Svg, { Polyline } from "react-native-svg";
 import { LinenScreen } from "../../components/LinenScreen";
 import {
   Topbar,
@@ -11,13 +12,44 @@ import {
   Btn,
   Bold,
 } from "../../components/linen";
-import { HelperNote } from "../../components/linen/extras";
+import { HelperNote, Card, KV } from "../../components/linen/extras";
 import { useAuth } from "../../lib/auth";
 import { supabase } from "../../lib/supabase";
 import { useRealtimeRefresh } from "../../lib/realtime";
 import { useT, format as fmt } from "../../lib/i18n";
 import { formatINR } from "../../lib/format";
 import { T as TH, font } from "../../lib/theme";
+
+/* Subset of GET /api/analytics/fos (FOS-scoped) that this screen renders. */
+type FosAnalytics = {
+  outstanding: { total: number; series: { date: string; total: number }[] };
+  aging: {
+    buckets: { label: string; amount: number }[];
+    topOverdue: { name: string; code: string; amount: number; days: number }[];
+  };
+  slowPayers: { name: string; code: string; outstanding: number; oldestDays: number }[];
+  alerts: {
+    staleRequests: { retailer: string; amount: number; hours: number }[];
+    staleCash: { retailer: string; amount: number; hours: number }[];
+    noPayment14d: { name: string; code: string; outstanding: number }[];
+  };
+};
+
+async function fetchFosAnalytics(): Promise<FosAnalytics | null> {
+  try {
+    const base = process.env.EXPO_PUBLIC_API_URL;
+    if (!base) return null;
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
+    if (!token) return null;
+    const res = await fetch(`${base}/api/analytics/fos`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as FosAnalytics;
+  } catch {
+    return null;
+  }
+}
 
 export default function FosHome() {
   const { profile } = useAuth();
@@ -27,10 +59,11 @@ export default function FosHome() {
   const [pendingInbox, setPendingInbox] = useState(0);
   const [retailerCount, setRetailerCount] = useState(0);
   const [outstanding, setOutstanding] = useState(0);
+  const [an, setAn] = useState<FosAnalytics | null>(null);
 
   const load = useCallback(async () => {
     if (!profile) return;
-    const [pi, rc, balances] = await Promise.all([
+    const [pi, rc, outRes, analytics] = await Promise.all([
       supabase
         .from("money_requests")
         .select("id", { count: "exact", head: true })
@@ -40,23 +73,20 @@ export default function FosHome() {
         .from("profiles")
         .select("id", { count: "exact", head: true })
         .eq("fos_id", profile.id)
-        .eq("role", "retailer"),
-      supabase
-        .from("daily_balances")
-        .select("retailer_id, account_id, balance_date, closing")
-        .order("balance_date", { ascending: false }),
+        .eq("role", "retailer")
+        .eq("excluded", false),
+      // Server-side latest-balance sum scoped to this FOS — no 1000-row cap.
+      supabase.rpc("org_outstanding", {
+        p_distributor: profile.distributor_id,
+        p_fos: profile.id,
+      }),
+      fetchFosAnalytics(),
     ]);
     setPendingInbox(pi.count ?? 0);
     setRetailerCount(rc.count ?? 0);
-    const seen = new Set<string>();
-    let total = 0;
-    for (const b of balances.data ?? []) {
-      const key = `${b.retailer_id}|${b.account_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      total += Number(b.closing);
-    }
+    const total = Number(outRes.data ?? 0);
     setOutstanding(total);
+    setAn(analytics);
   }, [profile]);
 
   useEffect(() => {
@@ -74,6 +104,8 @@ export default function FosHome() {
   );
 
   if (!profile) return null;
+
+  const heroTotal = an?.outstanding.total ?? outstanding;
 
   return (
     <LinenScreen
@@ -96,7 +128,7 @@ export default function FosHome() {
         />
       }
     >
-      {/* Hero stat: their outstanding (white card, rLg — design .hero-stat) */}
+      {/* Hero stat: their outstanding + 30-day trend */}
       <View
         style={{
           backgroundColor: TH.surface,
@@ -139,24 +171,12 @@ export default function FosHome() {
               backgroundColor: TH.accentSoft,
             }}
           >
-            <Text
-              style={{
-                fontSize: 11,
-                fontFamily: font(700, locale),
-                color: TH.accentInk,
-              }}
-            >
+            <Text style={{ fontSize: 11, fontFamily: font(700, locale), color: TH.accentInk }}>
               {fmt(t("fos.tile.retailer_count"), { n: retailerCount })}
             </Text>
           </View>
         </View>
-        <Text
-          style={{
-            fontSize: 13.5,
-            fontFamily: font(600, locale),
-            color: TH.ink2,
-          }}
-        >
+        <Text style={{ fontSize: 13.5, fontFamily: font(600, locale), color: TH.ink2 }}>
           {t("fos.tile.outstanding")}
         </Text>
         <Text
@@ -169,8 +189,11 @@ export default function FosHome() {
             marginTop: 4,
           }}
         >
-          {formatINR(outstanding)}
+          {formatINR(heroTotal)}
         </Text>
+        {an && an.outstanding.series.length > 1 ? (
+          <Sparkline series={an.outstanding.series} />
+        ) : null}
       </View>
 
       <View style={{ flexDirection: "row", gap: 13, marginTop: 13 }}>
@@ -189,6 +212,69 @@ export default function FosHome() {
           locale={locale}
         />
       </View>
+
+      {/* ── Aging ── */}
+      {an && an.aging.buckets.some((b) => b.amount > 0) ? (
+        <>
+          <SectionLabel locale={locale}>{t("fosdash.aging")}</SectionLabel>
+          <Card style={{ padding: 16 }}>
+            {an.aging.buckets.map((b) => (
+              <KV key={b.label} k={fmt(t("fosdash.days"), { d: b.label })} v={formatINR(b.amount)} locale={locale} />
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      {/* ── Top overdue ── */}
+      {an && an.aging.topOverdue.length ? (
+        <>
+          <SectionLabel locale={locale}>{t("fosdash.overdue")}</SectionLabel>
+          <Card style={{ padding: 16 }}>
+            {an.aging.topOverdue.map((r, i) => (
+              <View
+                key={r.code || i}
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 10,
+                  paddingVertical: 6,
+                }}
+              >
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text numberOfLines={1} style={{ fontSize: 14, fontFamily: font(700, locale), color: TH.ink }}>
+                    {r.name}
+                  </Text>
+                  <Text style={{ fontSize: 11.5, color: TH.ink3, fontFamily: font(500, locale) }}>
+                    {fmt(t("fosdash.days_old"), { n: r.days })}
+                  </Text>
+                </View>
+                <Text style={{ fontFamily: font(700, "en", "num"), fontSize: 14, color: TH.ink }}>
+                  {formatINR(r.amount)}
+                </Text>
+              </View>
+            ))}
+          </Card>
+        </>
+      ) : null}
+
+      {/* ── Needs attention ── */}
+      {an && (an.alerts.staleRequests.length || an.alerts.staleCash.length || an.alerts.noPayment14d.length) ? (
+        <>
+          <SectionLabel locale={locale}>{t("fosdash.alerts")}</SectionLabel>
+          <Card style={{ padding: 16 }}>
+            {an.alerts.staleRequests.map((a, i) => (
+              <AlertRow key={"sr" + i} text={fmt(t("fosdash.stale_req"), { name: a.retailer, h: a.hours })} amount={formatINR(a.amount)} locale={locale} />
+            ))}
+            {an.alerts.staleCash.map((a, i) => (
+              <AlertRow key={"sc" + i} text={fmt(t("fosdash.stale_cash"), { name: a.retailer, h: a.hours })} amount={formatINR(a.amount)} locale={locale} />
+            ))}
+            {an.alerts.noPayment14d.map((a, i) => (
+              <AlertRow key={"np" + i} text={fmt(t("fosdash.no_pay"), { name: a.name })} amount={formatINR(a.outstanding)} locale={locale} />
+            ))}
+          </Card>
+        </>
+      ) : null}
 
       <SectionLabel locale={locale}>{t("fos.quick_actions")}</SectionLabel>
       <View style={{ flexDirection: "row", gap: 12 }}>
@@ -217,6 +303,56 @@ export default function FosHome() {
         </View>
       )}
     </LinenScreen>
+  );
+}
+
+function Sparkline({ series }: { series: { date: string; total: number }[] }) {
+  const W = 300;
+  const H = 50;
+  const vals = series.map((p) => p.total);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || 1;
+  const pts = series
+    .map((p, i) => {
+      const x = (i / (series.length - 1)) * W;
+      const y = H - 6 - ((p.total - min) / range) * (H - 12);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <View style={{ marginTop: 12 }}>
+      <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <Polyline points={pts} fill="none" stroke={TH.accentInk} strokeWidth={2} />
+      </Svg>
+    </View>
+  );
+}
+
+function AlertRow({
+  text,
+  amount,
+  locale,
+}: {
+  text: string;
+  amount: string;
+  locale: "en" | "hi" | "gu";
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+        paddingVertical: 6,
+      }}
+    >
+      <AlertTriangle size={15} color={TH.warn} />
+      <Text numberOfLines={2} style={{ flex: 1, fontSize: 12.5, color: TH.ink2, fontFamily: font(500, locale) }}>
+        {text}
+      </Text>
+      <Text style={{ fontFamily: font(700, "en", "num"), fontSize: 13, color: TH.ink }}>{amount}</Text>
+    </View>
   );
 }
 

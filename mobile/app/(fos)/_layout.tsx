@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Home, Inbox, Wallet, Users } from "lucide-react-native";
+import { Home, Bell, Inbox, Wallet, Banknote, Send } from "lucide-react-native";
 import { View } from "react-native";
 import { RoleGate } from "../../components/RoleGate";
 import { useT } from "../../lib/i18n";
@@ -19,14 +19,15 @@ function ActiveDot() {
     />
   );
 }
-const Ic =
-  (IconComp: React.ComponentType<{ size: number; color: string }>) =>
-  ({ color, focused }: { color: string; focused: boolean }) => (
-    <View style={{ alignItems: "center", justifyContent: "center" }}>
-      {focused && <ActiveDot />}
-      <IconComp size={22} color={color} />
-    </View>
-  );
+const Ic = (IconComp: React.ComponentType<{ size: number; color: string }>) =>
+  function TabIcon({ color, focused }: { color: string; focused: boolean }) {
+    return (
+      <View style={{ alignItems: "center", justifyContent: "center" }}>
+        {focused && <ActiveDot />}
+        <IconComp size={22} color={color} />
+      </View>
+    );
+  };
 
 export default function FosLayout() {
   const { t, locale } = useT();
@@ -58,16 +59,24 @@ export default function FosLayout() {
           options={{ title: t("tabs.home"), tabBarIcon: Ic(Home) }}
         />
         <Tabs.Screen
+          name="action"
+          options={{ title: t("nav.action"), tabBarIcon: Ic(Bell) }}
+        />
+        <Tabs.Screen
           name="inbox"
           options={{ title: t("tabs.inbox"), tabBarIcon: Ic(Inbox) }}
         />
         <Tabs.Screen
           name="cash"
-          options={{ title: t("tabs.cash"), tabBarIcon: Ic(Wallet) }}
+          options={{ title: t("tabs.cash"), tabBarIcon: Ic(Banknote) }}
         />
         <Tabs.Screen
           name="retailers"
-          options={{ title: t("tabs.retailers"), tabBarIcon: Ic(Users) }}
+          options={{ title: t("tabs.outstanding"), tabBarIcon: Ic(Wallet) }}
+        />
+        <Tabs.Screen
+          name="request"
+          options={{ title: t("fosreq.tab"), tabBarIcon: Ic(Send) }}
         />
       </Tabs>
     </RoleGate>

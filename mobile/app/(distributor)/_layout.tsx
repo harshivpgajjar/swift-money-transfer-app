@@ -1,6 +1,7 @@
 import { Tabs } from "expo-router";
 import {
   Home,
+  Bell,
   CheckCircle2,
   Wallet,
   Upload,
@@ -63,6 +64,10 @@ export default function DistributorLayout() {
         <Tabs.Screen
           name="index"
           options={{ title: t("tabs.home"), tabBarIcon: Ic(Home) }}
+        />
+        <Tabs.Screen
+          name="action"
+          options={{ title: t("nav.action"), tabBarIcon: Ic(Bell) }}
         />
         <Tabs.Screen
           name="approvals"

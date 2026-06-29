@@ -8,7 +8,7 @@ export default async function DistributorHome() {
   const me = await requireRole("distributor");
   const supabase = await createClient();
 
-  const [pendingRequests, pendingCash, retailerCount, fosCount, needsAssignment, balances] =
+  const [pendingRequests, pendingCash, retailerCount, fosCount, needsAssignment, outRes, personalRes] =
     await Promise.all([
       supabase
         .from("money_requests")
@@ -25,7 +25,9 @@ export default async function DistributorHome() {
         .from("profiles")
         .select("id", { count: "exact", head: true })
         .eq("distributor_id", me.id)
-        .eq("role", "retailer"),
+        .eq("role", "retailer")
+        .eq("excluded", false)
+        .eq("personal", false),
       supabase
         .from("profiles")
         .select("id", { count: "exact", head: true })
@@ -37,26 +39,20 @@ export default async function DistributorHome() {
         .eq("distributor_id", me.id)
         .eq("role", "retailer")
         .eq("needs_assignment", true),
-      supabase
-        .from("daily_balances")
-        .select("retailer_id, account_id, balance_date, closing")
-        .order("balance_date", { ascending: false }),
+      // Server-side latest-balance sum — immune to the 1000-row fetch cap.
+      supabase.rpc("org_outstanding", { p_distributor: me.id }),
+      supabase.rpc("org_personal_outstanding", { p_distributor: me.id }),
     ]);
 
-  const seen = new Set<string>();
-  let total = 0;
-  for (const b of balances.data ?? []) {
-    const key = `${b.retailer_id}|${b.account_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    total += Number(b.closing);
-  }
+  const total = Number(outRes.data ?? 0);
+  const personalTotal = Number(personalRes.data ?? 0);
 
   const analytics = await getDistributorAnalytics(me.id);
 
   return (
     <DistributorHomeView
       totalOutstanding={total}
+      personalOutstanding={personalTotal}
       pendingRequests={pendingRequests.count ?? 0}
       pendingCash={pendingCash.count ?? 0}
       retailers={retailerCount.count ?? 0}

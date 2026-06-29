@@ -9,8 +9,35 @@ import {
   FosReviewSchema,
   NewMoneyRequestSchema,
 } from "@/lib/zod-schemas";
+import { postFosBalanceRequest } from "@/lib/fos-request";
 
 type Result = { ok: true } | { error: string };
+
+/* FOS raises a balance request on behalf of one of their retailers. Per the
+   distributor's current setup, distributor approval is automatic, so this posts
+   straight through as an approved transfer (and recomputes the ledger). The
+   defaulter block still applies — a flagged retailer gets no new credit. */
+export async function fosRequestBalance(formData: FormData): Promise<Result> {
+  const me = await requireRole("fos");
+  if (!me.distributor_id) return { error: "Profile is missing distributor link." };
+
+  const res = await postFosBalanceRequest(
+    { id: me.id, distributor_id: me.distributor_id },
+    {
+      retailer_id: formData.get("retailer_id"),
+      account_id: formData.get("account_id"),
+      amount: formData.get("amount"),
+      notes: formData.get("notes") ?? undefined,
+    },
+  );
+  if ("error" in res) return res;
+
+  revalidatePath("/fos/retailers");
+  revalidatePath("/fos");
+  revalidatePath("/distributor/outstanding");
+  revalidatePath("/distributor");
+  return { ok: true };
+}
 
 export async function createMoneyRequest(formData: FormData): Promise<Result> {
   const me = await requireRole("retailer");
@@ -106,8 +133,22 @@ export async function fosReviewRequest(formData: FormData): Promise<Result> {
     finalAmount = parsed.data.amount;
   }
 
+  // Defaulter credit block: a defaulter never gets new credit, so auto-approve
+  // is suppressed — the request stays pending (distributor approval is blocked
+  // too until the flag is cleared).
+  let retailerDefaulted = false;
+  if (autoApprove && finalAmount !== null && parsed.data.decision !== "decline") {
+    const { data: rp } = await admin
+      .from("profiles")
+      .select("defaulted")
+      .eq("id", existing.retailer_id)
+      .maybeSingle();
+    retailerDefaulted = !!rp?.defaulted;
+  }
+  const didAutoApprove = autoApprove && finalAmount !== null && !retailerDefaulted;
+
   // Auto-approve: FOS's decision also approves on the distributor's behalf.
-  if (autoApprove && finalAmount !== null) {
+  if (didAutoApprove) {
     update.distributor_status = "approved";
     update.distributor_acted_at = now;
     update.distributor_notes = "Auto-approved per FOS authority";
@@ -121,7 +162,7 @@ export async function fosReviewRequest(formData: FormData): Promise<Result> {
     .eq("fos_id", me.id);
   if (error) return { error: error.message };
 
-  if (autoApprove && finalAmount !== null) {
+  if (didAutoApprove) {
     await admin.rpc("recompute_balances", {
       p_retailer_id: existing.retailer_id,
       p_account_id: effectiveAccountId,
@@ -160,6 +201,17 @@ export async function distributorDecideRequest(formData: FormData): Promise<Resu
     .eq("distributor_id", me.id)
     .single();
   if (readErr || !req) return { error: "Request not found" };
+
+  // Block new credit to a defaulter — clear the defaulter flag first to approve.
+  if (parsed.data.decision === "approve") {
+    const { data: rp } = await admin
+      .from("profiles")
+      .select("defaulted")
+      .eq("id", req.retailer_id)
+      .maybeSingle();
+    if (rp?.defaulted)
+      return { error: "Retailer is marked a defaulter — clear the flag to approve credit." };
+  }
 
   const actedAt = new Date().toISOString();
   const approving = parsed.data.decision === "approve";

@@ -26,6 +26,13 @@ export function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/* Shift a YYYY-MM-DD date by N days (UTC, matching todayIso). */
+export function isoAddDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 /* Design-style short forms: "08 Jun" and "08 Jun, 10:24 AM" */
 export function formatShortDate(value: string | Date | null | undefined): string {
   if (!value) return "—";

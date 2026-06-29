@@ -7,6 +7,7 @@ import { Icon, Tile, useCountUp } from "@/lib/ui";
 
 export default function DistributorHomeView({
   totalOutstanding,
+  personalOutstanding = 0,
   pendingRequests,
   pendingCash,
   retailers,
@@ -15,6 +16,7 @@ export default function DistributorHomeView({
   analytics,
 }: {
   totalOutstanding: number;
+  personalOutstanding?: number;
   pendingRequests: number;
   pendingCash: number;
   retailers: number;
@@ -44,6 +46,11 @@ export default function DistributorHomeView({
         </div>
         <div className="tile-label">{t("dist.tile.outstanding")}</div>
         <div className="tile-val">{formatINR(out)}</div>
+        {personalOutstanding !== 0 && (
+          <div className="tile-sub" style={{ marginTop: 4, fontSize: 12.5, opacity: 0.75 }}>
+            {t("out.personal")}: {formatINR(personalOutstanding)}
+          </div>
+        )}
       </div>
 
       <div className="dist-tiles">

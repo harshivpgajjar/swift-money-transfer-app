@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Home, ArrowUp, Wallet, Clock } from "lucide-react-native";
+import { Home, ArrowUp, Wallet, Clock, Receipt } from "lucide-react-native";
 import { View } from "react-native";
 import { RoleGate } from "../../components/RoleGate";
 import { useT } from "../../lib/i18n";
@@ -84,6 +84,15 @@ export default function RetailerLayout() {
             title: t("tabs.cash"),
             tabBarIcon: ({ color, focused }) => (
               <TabBarIcon IconComp={Wallet} color={color} focused={focused} />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="outstanding"
+          options={{
+            title: t("tabs.outstanding"),
+            tabBarIcon: ({ color, focused }) => (
+              <TabBarIcon IconComp={Receipt} color={color} focused={focused} />
             ),
           }}
         />

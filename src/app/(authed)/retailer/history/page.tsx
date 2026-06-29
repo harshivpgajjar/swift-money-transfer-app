@@ -1,12 +1,40 @@
 import { requireRole } from "@/lib/auth";
-import { getRetailerDailyBalances, getRetailerHistory } from "@/lib/queries";
+import { getRetailerDailyBalances, getRetailerHistory, type DateRange } from "@/lib/queries";
 import { getAccountsForDistributor } from "@/lib/accounts";
+import { todayIso, isoAddDays } from "@/lib/format";
 import HistoryView from "./history-view";
+
+// Resolve the statement window from the URL. Default is the previous day only
+// (light view); "all" loads the full history; "custom" honours from/to.
+function resolveRange(sp: {
+  range?: string;
+  from?: string;
+  to?: string;
+}): { preset: string; range?: DateRange } {
+  const today = todayIso();
+  const yesterday = isoAddDays(today, -1);
+  switch (sp.range) {
+    case "all":
+      return { preset: "all", range: undefined };
+    case "7d":
+      return { preset: "7d", range: { from: isoAddDays(today, -6), to: today } };
+    case "30d":
+      return { preset: "30d", range: { from: isoAddDays(today, -29), to: today } };
+    case "custom":
+      if (sp.from && sp.to) {
+        const [from, to] = sp.from <= sp.to ? [sp.from, sp.to] : [sp.to, sp.from];
+        return { preset: "custom", range: { from, to } };
+      }
+      return { preset: "1d", range: { from: yesterday, to: yesterday } };
+    default:
+      return { preset: "1d", range: { from: yesterday, to: yesterday } };
+  }
+}
 
 export default async function RetailerHistoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ account?: string }>;
+  searchParams: Promise<{ account?: string; range?: string; from?: string; to?: string }>;
 }) {
   const me = await requireRole("retailer");
   if (!me.distributor_id) return null;
@@ -15,16 +43,20 @@ export default async function RetailerHistoryPage({
 
   const sp = await searchParams;
   const active = accounts.find((a) => a.slug === sp.account) ?? accounts[0];
+  const { preset, range } = resolveRange(sp);
 
   const [history, dailies] = await Promise.all([
-    getRetailerHistory(me.id, active.id),
-    getRetailerDailyBalances(me.id, active.id, 60),
+    getRetailerHistory(me.id, active.id, range),
+    getRetailerDailyBalances(me.id, active.id, 60, range),
   ]);
 
   return (
     <HistoryView
       accounts={accounts.map((a) => ({ id: a.id, slug: a.slug, name: a.name }))}
       activeSlug={active.slug}
+      preset={preset}
+      from={range?.from ?? ""}
+      to={range?.to ?? ""}
       daily={dailies.map((d) => ({
         date: d.balance_date,
         opening: Number(d.opening),

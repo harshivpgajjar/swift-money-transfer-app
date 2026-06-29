@@ -206,6 +206,37 @@ function parseDmyDate(v: unknown): string | undefined {
   return `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
 }
 
+/* Full IST timestamp from a "DD/MM/YYYY HH:mm[:ss] [AM/PM]" cell. Returns an
+   ISO string with the +05:30 offset, or undefined when the cell carries no
+   time (date-only). Drives the intraday "by 3 PM" action signal. */
+function parseDmyDateTime(v: unknown): string | undefined {
+  const s = stripExcelEscape(v);
+  const m = s.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?/,
+  );
+  if (!m) return undefined;
+  const [, d, mo, y, hh, mi, ss, ap] = m;
+  let hour = Number(hh);
+  if (ap) {
+    const pm = /p/i.test(ap);
+    if (pm && hour < 12) hour += 12;
+    else if (!pm && hour === 12) hour = 0;
+  }
+  if (hour > 23 || Number(mi) > 59) return undefined;
+  const date = `${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  return `${date}T${String(hour).padStart(2, "0")}:${mi}:${(ss ?? "00").padStart(2, "0")}+05:30`;
+}
+
+// ISO date+time from an A2Z "date/time" cell already in "YYYY-MM-DD HH:mm[:ss]".
+function parseIsoDateTime(v: unknown): string | undefined {
+  const s = stripExcelEscape(v);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return undefined;
+  const [, date, hh, mi, ss] = m;
+  if (Number(hh) > 23 || Number(mi) > 59) return undefined;
+  return `${date}T${hh.padStart(2, "0")}:${mi}:${(ss ?? "00").padStart(2, "0")}+05:30`;
+}
+
 function parseSignedAmount(v: unknown): number | undefined {
   const s = stripExcelEscape(v).replace(/[, ]/g, "");
   if (!s) return undefined;
@@ -259,6 +290,7 @@ function mapReportRow(rowRaw: Record<string, unknown>, todayIso: string): RowOut
     signed < 0 || narration.includes("reversal") ? "reversal" : "transfer";
 
   const txn_date = parseDmyDate(rowRaw.transfer_date) ?? todayIso;
+  const txn_at = parseDmyDateTime(rowRaw.transfer_date);
 
   const remarks = cleanString(rowRaw.remarks);
   const requestId = cleanString(rowRaw.requestid);
@@ -270,6 +302,7 @@ function mapReportRow(rowRaw: Record<string, unknown>, todayIso: string): RowOut
       type: inferredType,
       amount: Math.abs(signed),
       txn_date,
+      txn_at,
       bank_reference: requestId,
       notes: remarks ?? cleanString(rowRaw.narration),
     },
@@ -315,6 +348,7 @@ function mapHtARow(rowRaw: Record<string, unknown>, todayIso: string): RowOut2 {
       type: tranName.includes("reversal") ? "reversal" : "transfer",
       amount: Math.abs(amount),
       txn_date: parseDmyDate(rowRaw.transfer_date) ?? todayIso,
+      txn_at: parseDmyDateTime(rowRaw.transfer_date),
       bank_reference: cleanString(rowRaw.request_id),
       notes: cleanString(rowRaw.remarks),
     },
@@ -338,6 +372,7 @@ function mapHtBRow(rowRaw: Record<string, unknown>, todayIso: string): RowOut2 {
       type: debit > 0 ? "transfer" : "reversal",
       amount: debit > 0 ? debit : credit,
       txn_date: parseDmyDate(rowRaw.transfer_date) ?? todayIso,
+      txn_at: parseDmyDateTime(rowRaw.transfer_date),
       bank_reference: cleanString(rowRaw.request_id),
       notes: cleanString(rowRaw.remarks),
     },
@@ -357,6 +392,7 @@ function mapA2zRow(rowRaw: Record<string, unknown>, todayIso: string): RowOut2 {
   const dateRaw = cleanString(rowRaw["date/time"]) ?? "";
   const isoMatch = dateRaw.match(/^(\d{4}-\d{2}-\d{2})/);
   const txn_date = isoMatch ? isoMatch[1] : todayIso;
+  const txn_at = parseIsoDateTime(rowRaw["date/time"]);
   // The export's columns are shifted: "Order id" holds the wallet label
   // ("Money") and "Wallet" holds the actual numeric order number. Use
   // whichever looks like a real id — it is the dedup key, so a non-unique
@@ -388,6 +424,7 @@ function mapA2zRow(rowRaw: Record<string, unknown>, todayIso: string): RowOut2 {
       type: refId === "DT REVERSED" ? "reversal" : "transfer",
       amount: Math.abs(amount),
       txn_date,
+      txn_at,
       bank_reference: orderId,
       notes: firm,
     },

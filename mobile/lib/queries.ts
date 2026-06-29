@@ -56,10 +56,14 @@ export type RetailerSummary = {
   needs_assignment: boolean;
   fos_id: string | null;
   fos_name: string | null;
+  opening?: number;
   total_transferred: number;
   total_reversed: number;
   total_cash: number;
   outstanding: number;
+  defaulted?: boolean;
+  atRisk?: boolean;
+  personal?: boolean;
 };
 
 const REQUEST_SELECT = `
@@ -139,30 +143,48 @@ export async function getRetailerLatestBalance(retailerId: string) {
   return data;
 }
 
-export async function getRetailerHistory(retailerId: string, accountId?: string) {
-  const reqQ = supabase
+export type DateRange = { from: string; to: string };
+
+export async function getRetailerHistory(
+  retailerId: string,
+  accountId?: string,
+  // When given, the statement is limited to this date window (the default,
+  // light view). When omitted, the full history is returned ("All").
+  range?: DateRange,
+) {
+  const cap = range ? 1000 : 100;
+  let reqQ = supabase
     .from("money_requests")
     .select("*")
     .eq("retailer_id", retailerId)
     .order("created_at", { ascending: false })
-    .limit(50);
-  const cashQ = supabase
+    .limit(cap);
+  let cashQ = supabase
     .from("cash_submissions")
     .select("*")
     .eq("retailer_id", retailerId)
     .order("created_at", { ascending: false })
-    .limit(50);
-  const eodQ = supabase
+    .limit(cap);
+  let eodQ = supabase
     .from("eod_transactions")
     .select("*")
     .eq("retailer_id", retailerId)
     .order("txn_date", { ascending: false })
-    .limit(50);
-  const [requests, cash, eod] = await Promise.all([
-    accountId ? reqQ.eq("account_id", accountId) : reqQ,
-    accountId ? cashQ.eq("account_id", accountId) : cashQ,
-    accountId ? eodQ.eq("account_id", accountId) : eodQ,
-  ]);
+    .limit(cap);
+  if (accountId) {
+    reqQ = reqQ.eq("account_id", accountId);
+    cashQ = cashQ.eq("account_id", accountId);
+    eodQ = eodQ.eq("account_id", accountId);
+  }
+  if (range) {
+    // money_requests has no txn_date — filter on created_at (UTC, matching the app).
+    reqQ = reqQ
+      .gte("created_at", `${range.from}T00:00:00.000Z`)
+      .lte("created_at", `${range.to}T23:59:59.999Z`);
+    cashQ = cashQ.gte("txn_date", range.from).lte("txn_date", range.to);
+    eodQ = eodQ.gte("txn_date", range.from).lte("txn_date", range.to);
+  }
+  const [requests, cash, eod] = await Promise.all([reqQ, cashQ, eodQ]);
   if (requests.error) throw requests.error;
   if (cash.error) throw cash.error;
   if (eod.error) throw eod.error;
@@ -210,6 +232,7 @@ export async function getDistributorRetailerSummaries(
     .select("id, retailer_code, full_name, active, needs_assignment, fos_id, fos:fos_id(full_name)")
     .eq("role", "retailer")
     .eq("distributor_id", distributorId)
+    .eq("excluded", false)
     .order("retailer_code");
   if (error) throw error;
   if (!retailers || retailers.length === 0) return [];
@@ -286,6 +309,138 @@ export async function getDistributorRetailerSummaries(
       outstanding: latestClosing.get(r.id) ?? t - v - c,
     };
   });
+}
+
+/* Outstanding screen, windowed: per-retailer MOVEMENTS (transferred/reversed/
+   cash) summed over [range.from, range.to] from the ledger, while `outstanding`
+   is the carried balance — the closing of the latest day on/before range.to. */
+export async function getDistributorRetailerSummariesByDate(
+  distributorId: string,
+  accountId: string,
+  range: DateRange,
+  // When set, restrict to retailers assigned to this FOS (FOS-facing report).
+  fosId?: string,
+  // When set, restrict to a single retailer (retailer-facing own view).
+  retailerId?: string,
+): Promise<RetailerSummary[]> {
+  let rQ = supabase
+    .from("profiles")
+    .select("id, retailer_code, full_name, active, needs_assignment, fos_id, defaulted, personal, fos:fos_id(full_name)")
+    .eq("role", "retailer")
+    .eq("distributor_id", distributorId)
+    .eq("excluded", false)
+    .order("retailer_code");
+  if (fosId) rQ = rQ.eq("fos_id", fosId);
+  if (retailerId) rQ = rQ.eq("id", retailerId);
+  const { data: retailers, error } = await rQ;
+  if (error) throw error;
+  if (!retailers || retailers.length === 0) return [];
+
+  const ids = retailers.map((r) => r.id);
+  const [balsRes, cashRes] = await Promise.all([
+    supabase
+      .from("daily_balances")
+      .select("retailer_id, balance_date, transferred, reversed, cash_received, closing")
+      .in("retailer_id", ids)
+      .eq("account_id", accountId)
+      .lte("balance_date", range.to)
+      .order("balance_date", { ascending: false }),
+    // Last cash across ALL accounts (cash book / EOD), newest first — drives the
+    // 45-day at-risk signal. Cash lives here, not in cash_submissions.
+    supabase
+      .from("daily_balances")
+      .select("retailer_id, balance_date")
+      .in("retailer_id", ids)
+      .gt("cash_received", 0)
+      .order("balance_date", { ascending: false }),
+  ]);
+  const bals = balsRes.data;
+  if (balsRes.error) throw balsRes.error;
+  if (cashRes.error) throw cashRes.error;
+
+  const lastPayment = new Map<string, string>();
+  for (const c of cashRes.data ?? []) {
+    if (!lastPayment.has(c.retailer_id)) lastPayment.set(c.retailer_id, c.balance_date);
+  }
+  const riskCutoff = (() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 45);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const transferred = new Map<string, number>();
+  const reversed = new Map<string, number>();
+  const cash = new Map<string, number>();
+  const closing = new Map<string, number>();
+  const opening = new Map<string, number>(); // carried balance at window start
+  for (const b of bals ?? []) {
+    if (!closing.has(b.retailer_id)) closing.set(b.retailer_id, Number(b.closing));
+    if (b.balance_date >= range.from) {
+      transferred.set(b.retailer_id, (transferred.get(b.retailer_id) ?? 0) + Number(b.transferred));
+      reversed.set(b.retailer_id, (reversed.get(b.retailer_id) ?? 0) + Number(b.reversed));
+      cash.set(b.retailer_id, (cash.get(b.retailer_id) ?? 0) + Number(b.cash_received));
+    } else if (!opening.has(b.retailer_id)) {
+      // First row before the window = carried-in opening for the window.
+      opening.set(b.retailer_id, Number(b.closing));
+    }
+  }
+
+  return retailers.map((r) => {
+    const out = closing.get(r.id) ?? 0;
+    const lp = lastPayment.get(r.id);
+    const defaulted = (r as unknown as { defaulted: boolean | null }).defaulted ?? false;
+    const personal = (r as unknown as { personal: boolean | null }).personal ?? false;
+    return {
+      id: r.id,
+      retailer_code: r.retailer_code,
+      full_name: r.full_name,
+      active: r.active,
+      needs_assignment: r.needs_assignment,
+      fos_id: r.fos_id,
+      fos_name: ((r as unknown as { fos: { full_name: string } | null }).fos)?.full_name ?? null,
+      opening: opening.get(r.id) ?? 0,
+      total_transferred: transferred.get(r.id) ?? 0,
+      total_reversed: reversed.get(r.id) ?? 0,
+      total_cash: cash.get(r.id) ?? 0,
+      outstanding: out,
+      defaulted,
+      personal,
+      atRisk: !defaulted && !personal && out > 0 && (!lp || lp < riskCutoff),
+    };
+  });
+}
+
+export type ActionBucket = "attention" | "alert" | "atrisk" | "defaulter";
+export type ActionRow = {
+  bucket: ActionBucket;
+  retailer_id: string;
+  full_name: string;
+  retailer_code: string | null;
+  phone: string | null;
+  fos_id: string | null;
+  outstanding: number; // pending till 3 PM
+  full_pending: number; // total current outstanding
+  today_transfer: number;
+  transfer_at: string | null;
+  last_cash: string | null;
+  ref_day: string;
+};
+
+export async function getActionCenter(
+  distributorId: string,
+  fosId?: string,
+): Promise<ActionRow[]> {
+  const { data, error } = await supabase.rpc("action_center", {
+    p_distributor: distributorId,
+    p_fos: fosId ?? null,
+  });
+  if (error) throw error;
+  return ((data ?? []) as ActionRow[]).map((r) => ({
+    ...r,
+    outstanding: Number(r.outstanding),
+    full_pending: Number(r.full_pending),
+    today_transfer: Number(r.today_transfer),
+  }));
 }
 
 export async function getDistributorRoster(distributorId: string) {

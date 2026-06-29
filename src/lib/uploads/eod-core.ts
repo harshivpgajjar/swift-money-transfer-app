@@ -127,12 +127,16 @@ async function processEodParsed(
   // Pull every retailer of this distributor; match by phone, then code, then name.
   const { data: retailers, error: retailersErr } = await admin
     .from("profiles")
-    .select("id, retailer_code, phone, full_name, distributor_id")
+    .select("id, retailer_code, phone, full_name, distributor_id, excluded")
     .eq("distributor_id", distributor.id)
     .eq("role", "retailer");
   if (retailersErr) {
     return { ok: false, errors: [{ row: 0, message: retailersErr.message }] };
   }
+  // Excluded (internal/own-account) retailers are never booked from EOD files.
+  const excludedIds = new Set(
+    (retailers ?? []).filter((r) => (r as { excluded?: boolean }).excluded).map((r) => r.id),
+  );
   const { data: distProfile } = await admin
     .from("profiles")
     .select("full_name")
@@ -265,6 +269,14 @@ async function processEodParsed(
       }
     }
 
+    if (excludedIds.has(id)) {
+      skipped.push({
+        row: 0,
+        message: `Excluded account skipped: ${row.retailer_name} ₹${row.amount}`,
+      });
+      continue;
+    }
+
     resolved.push({ ...row, retailer_id: id });
   }
 
@@ -278,11 +290,33 @@ async function processEodParsed(
   if (refs.length) {
     const { data: existing } = await admin
       .from("eod_transactions")
-      .select("bank_reference")
+      .select("bank_reference, txn_at")
       .eq("distributor_id", distributor.id)
       .eq("account_id", accountId)
       .in("bank_reference", refs);
     const seen = new Set((existing ?? []).map((e) => e.bank_reference));
+
+    // Heal previously-imported rows that lack a transaction time: a re-upload of
+    // the same file (now carrying times) backfills txn_at instead of being
+    // skipped as a duplicate. Lets the "by 3 PM" signal become accurate for days
+    // first uploaded before time-capture existed.
+    const incomingTime = new Map(
+      resolved
+        .filter((r) => r.bank_reference && r.txn_at)
+        .map((r) => [r.bank_reference as string, r.txn_at as string]),
+    );
+    for (const e of existing ?? []) {
+      if (e.txn_at != null || !e.bank_reference) continue;
+      const at = incomingTime.get(e.bank_reference);
+      if (!at) continue;
+      await admin
+        .from("eod_transactions")
+        .update({ txn_at: at })
+        .eq("distributor_id", distributor.id)
+        .eq("account_id", accountId)
+        .eq("bank_reference", e.bank_reference);
+    }
+
     if (seen.size) {
       final = resolved.filter((r) => !r.bank_reference || !seen.has(r.bank_reference));
       duplicates = resolved.length - final.length;
@@ -339,6 +373,7 @@ async function processEodParsed(
     type: r.type,
     amount: r.amount,
     txn_date: r.txn_date,
+    txn_at: r.txn_at ?? null,
     bank_reference: r.bank_reference ?? null,
     notes: r.notes ?? null,
     // The name+phone as they appeared in the portal file — lets a wrong match

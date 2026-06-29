@@ -13,7 +13,12 @@ type Role = "distributor" | "fos" | "retailer";
 
 type NavItem = { key: string; labelKey: string; icon: IconName; href: string; badge?: number };
 
-function navFor(role: Role, inboxBadge: number, approvalsBadge: number): NavItem[] {
+function navFor(
+  role: Role,
+  inboxBadge: number,
+  approvalsBadge: number,
+  actionBadge: number,
+): NavItem[] {
   if (role === "retailer") {
     return [
       { key: "home", labelKey: "nav.overview", icon: "home", href: "/retailer" },
@@ -25,13 +30,16 @@ function navFor(role: Role, inboxBadge: number, approvalsBadge: number): NavItem
   if (role === "fos") {
     return [
       { key: "home", labelKey: "nav.overview", icon: "home", href: "/fos" },
+      { key: "action", labelKey: "nav.action", icon: "bell", href: "/fos/action", badge: actionBadge },
       { key: "inbox", labelKey: "nav.inbox", icon: "inbox", href: "/fos/inbox", badge: inboxBadge },
       { key: "cash", labelKey: "nav.cash", icon: "cash", href: "/fos/cash" },
       { key: "retailers", labelKey: "nav.retailers", icon: "people", href: "/fos/retailers" },
+      { key: "request", labelKey: "nav.request", icon: "send", href: "/fos/request" },
     ];
   }
   return [
     { key: "home", labelKey: "nav.overview", icon: "home", href: "/distributor" },
+    { key: "action", labelKey: "nav.action", icon: "bell", href: "/distributor/action", badge: actionBadge },
     {
       key: "approvals",
       labelKey: "nav.approvals",
@@ -70,6 +78,7 @@ export default function AppShell({
   fosName,
   inboxBadge = 0,
   approvalsBadge = 0,
+  actionBadge = 0,
   children,
 }: {
   role: Role;
@@ -78,11 +87,12 @@ export default function AppShell({
   fosName?: string | null;
   inboxBadge?: number;
   approvalsBadge?: number;
+  actionBadge?: number;
   children: ReactNode;
 }) {
   const { t, locale, setLocale } = useT();
   const pathname = usePathname() ?? "/";
-  const nav = navFor(role, inboxBadge, approvalsBadge);
+  const nav = navFor(role, inboxBadge, approvalsBadge, actionBadge);
 
   const roleLabel =
     role === "distributor"

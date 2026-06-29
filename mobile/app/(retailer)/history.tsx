@@ -10,12 +10,13 @@ import {
   Row,
   Badge,
   Empty,
+  Field,
   type BadgeTone,
 } from "../../components/linen/extras";
 import { DTable, type DCell } from "../../components/linen/more";
 import { useAuth } from "../../lib/auth";
 import { fetchAccounts } from "../../lib/accounts";
-import { getRetailerHistory } from "../../lib/queries";
+import { getRetailerHistory, type DateRange } from "../../lib/queries";
 import { supabase } from "../../lib/supabase";
 import { useRealtimeRefresh } from "../../lib/realtime";
 import { useT, format as fmt } from "../../lib/i18n";
@@ -32,6 +33,16 @@ type DailyRow = {
   closing: string | number;
 };
 
+// Sentinel for the combined "A2Z + Swift" view in the account switcher.
+const COMBINED = "__all__";
+
+// Shift a YYYY-MM-DD date by N days (UTC, matching the app's date handling).
+function addDays(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export default function RetailerHistory() {
   const { profile } = useAuth();
   const { t, locale } = useT();
@@ -45,6 +56,10 @@ export default function RetailerHistory() {
   });
   const [dailies, setDailies] = useState<DailyRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  // Statement window: "1d" (yesterday, default) | "7d" | "30d" | "all" | "custom".
+  const [range, setRange] = useState("1d");
+  const [fromInput, setFromInput] = useState("");
+  const [toInput, setToInput] = useState("");
 
   const load = useCallback(async () => {
     if (!profile?.distributor_id) return;
@@ -52,26 +67,82 @@ export default function RetailerHistory() {
     setAccounts(list);
     let acct = accountId;
     if (!acct) {
+      // Honour a tapped account tile (?account=slug); otherwise show combined.
       acct = params.account
-        ? list.find((a) => a.slug === params.account)?.id ?? list[0]?.id ?? null
-        : list[0]?.id ?? null;
+        ? list.find((a) => a.slug === params.account)?.id ?? COMBINED
+        : COMBINED;
       setAccountId(acct);
     }
     if (!acct) return;
 
-    const [h, d] = await Promise.all([
-      getRetailerHistory(profile.id, acct),
-      supabase
+    // Resolve the statement window. Default is the previous day only (light
+    // view); "all" loads full history; "custom" honours the from/to inputs.
+    const today = new Date().toISOString().slice(0, 10);
+    let effRange: DateRange | undefined;
+    if (range === "all") effRange = undefined;
+    else if (range === "7d") effRange = { from: addDays(today, -6), to: today };
+    else if (range === "30d") effRange = { from: addDays(today, -29), to: today };
+    else if (range === "custom" && fromInput && toInput)
+      effRange =
+        fromInput <= toInput
+          ? { from: fromInput, to: toInput }
+          : { from: toInput, to: fromInput };
+    else effRange = { from: addDays(today, -1), to: addDays(today, -1) };
+
+    if (acct === COMBINED) {
+      // Combined "A2Z + Swift": history across all accounts, and daily balances
+      // merged by date (each field summed across accounts for that day).
+      let dq = supabase
         .from("daily_balances")
         .select("balance_date, opening, transferred, reversed, cash_received, closing")
         .eq("retailer_id", profile.id)
-        .eq("account_id", acct)
-        .order("balance_date", { ascending: false })
-        .limit(30),
+        .order("balance_date", { ascending: false });
+      if (effRange) dq = dq.gte("balance_date", effRange.from).lte("balance_date", effRange.to);
+      const [h, d] = await Promise.all([
+        getRetailerHistory(profile.id, undefined, effRange),
+        dq,
+      ]);
+      const byDate = new Map<string, DailyRow>();
+      for (const b of (d.data ?? []) as DailyRow[]) {
+        const cur =
+          byDate.get(b.balance_date) ??
+          {
+            balance_date: b.balance_date,
+            opening: 0,
+            transferred: 0,
+            reversed: 0,
+            cash_received: 0,
+            closing: 0,
+          };
+        cur.opening = Number(cur.opening) + Number(b.opening);
+        cur.transferred = Number(cur.transferred) + Number(b.transferred);
+        cur.reversed = Number(cur.reversed) + Number(b.reversed);
+        cur.cash_received = Number(cur.cash_received) + Number(b.cash_received);
+        cur.closing = Number(cur.closing) + Number(b.closing);
+        byDate.set(b.balance_date, cur);
+      }
+      const merged = Array.from(byDate.values());
+      setHistory(h);
+      setDailies(effRange ? merged : merged.slice(0, 60));
+      return;
+    }
+
+    let dq = supabase
+      .from("daily_balances")
+      .select("balance_date, opening, transferred, reversed, cash_received, closing")
+      .eq("retailer_id", profile.id)
+      .eq("account_id", acct)
+      .order("balance_date", { ascending: false });
+    dq = effRange
+      ? dq.gte("balance_date", effRange.from).lte("balance_date", effRange.to)
+      : dq.limit(30);
+    const [h, d] = await Promise.all([
+      getRetailerHistory(profile.id, acct, effRange),
+      dq,
     ]);
     setHistory(h);
     setDailies((d.data ?? []) as DailyRow[]);
-  }, [profile, accountId, params.account]);
+  }, [profile, accountId, params.account, range, fromInput, toInput]);
 
   useEffect(() => {
     load();
@@ -130,11 +201,55 @@ export default function RetailerHistory() {
       }}
     >
       <Segmented
-        options={accounts.map((a) => ({ value: a.id, label: a.name }))}
+        options={[
+          { value: COMBINED, label: t("out.acct.all") },
+          ...accounts.map((a) => ({ value: a.id, label: a.name })),
+        ]}
         value={accountId ?? ""}
         onChange={setAccountId}
         locale={locale}
       />
+
+      <View style={{ height: 13 }} />
+      <Card style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12 }}>
+        <Segmented
+          options={[
+            { value: "1d", label: t("hist.range.yesterday") },
+            { value: "7d", label: t("hist.range.7d") },
+            { value: "30d", label: t("hist.range.30d") },
+            { value: "all", label: t("hist.range.all") },
+          ]}
+          value={range === "custom" ? "" : range}
+          onChange={setRange}
+          locale={locale}
+        />
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Field
+              label={t("hist.range.from")}
+              value={fromInput}
+              onChangeText={(v) => {
+                setFromInput(v);
+                if (v && toInput) setRange("custom");
+              }}
+              placeholder="YYYY-MM-DD"
+              locale={locale}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field
+              label={t("hist.range.to")}
+              value={toInput}
+              onChangeText={(v) => {
+                setToInput(v);
+                if (fromInput && v) setRange("custom");
+              }}
+              placeholder="YYYY-MM-DD"
+              locale={locale}
+            />
+          </View>
+        </View>
+      </Card>
 
       <SectionLabel locale={locale}>{t("history.daily")}</SectionLabel>
       <Card style={{ paddingTop: 8, paddingHorizontal: 16, paddingBottom: 4 }}>

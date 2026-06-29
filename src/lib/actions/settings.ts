@@ -119,6 +119,43 @@ export async function forceChangePassword(formData: FormData): Promise<Result> {
   return { ok: true };
 }
 
+/* ---------- distributor: defaulter handling ---------- */
+
+/* Mark / clear a retailer as a defaulter. Distributor-only. Keeps the balance
+   on the books — only flags the retailer for segregation + credit block. */
+export async function setDefaulter(formData: FormData): Promise<Result> {
+  const me = await requireRole("distributor");
+  const retailerId = String(formData.get("retailer_id") ?? "");
+  const on = String(formData.get("on") ?? "") === "true";
+  const note = String(formData.get("note") ?? "").trim();
+  if (!retailerId) return { error: "Missing retailer" };
+
+  const admin = createAdminClient();
+  // Verify the retailer belongs to this distributor.
+  const { data: r } = await admin
+    .from("profiles")
+    .select("id, distributor_id, role")
+    .eq("id", retailerId)
+    .maybeSingle();
+  if (!r || r.role !== "retailer" || r.distributor_id !== me.id) {
+    return { error: "Invalid retailer" };
+  }
+
+  const { error } = await admin
+    .from("profiles")
+    .update({
+      defaulted: on,
+      defaulted_at: on ? new Date().toISOString() : null,
+      default_note: on ? note || null : null,
+    })
+    .eq("id", retailerId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/distributor/outstanding");
+  revalidatePath("/distributor");
+  return { ok: true };
+}
+
 /* ---------- distributor: accounts management ---------- */
 
 export async function renameAccount(formData: FormData): Promise<Result> {

@@ -6,7 +6,7 @@ export default async function FosHome() {
   const me = await requireRole("fos");
   const supabase = await createClient();
 
-  const [pendingInbox, retailers, balances] = await Promise.all([
+  const [pendingInbox, retailers, outRes] = await Promise.all([
     supabase
       .from("money_requests")
       .select("id", { count: "exact", head: true })
@@ -16,22 +16,13 @@ export default async function FosHome() {
       .from("profiles")
       .select("id", { count: "exact", head: true })
       .eq("fos_id", me.id)
-      .eq("role", "retailer"),
-    supabase
-      .from("daily_balances")
-      .select("retailer_id, account_id, balance_date, closing")
-      .order("balance_date", { ascending: false }),
+      .eq("role", "retailer")
+      .eq("excluded", false),
+    // Server-side latest-balance sum scoped to this FOS — no 1000-row cap.
+    supabase.rpc("org_outstanding", { p_distributor: me.distributor_id, p_fos: me.id }),
   ]);
 
-  // latest closing per (retailer, account), summed
-  const seen = new Set<string>();
-  let total = 0;
-  for (const b of balances.data ?? []) {
-    const key = `${b.retailer_id}|${b.account_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    total += Number(b.closing);
-  }
+  const total = Number(outRes.data ?? 0);
 
   return (
     <FosHomeView

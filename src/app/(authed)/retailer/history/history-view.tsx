@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { useT, fmt } from "@/lib/i18n";
 import { formatShortDate, formatShortDateTime, kShort } from "@/lib/format";
@@ -42,6 +43,9 @@ type EodItem = {
 export default function HistoryView({
   accounts,
   activeSlug,
+  preset,
+  from,
+  to,
   daily,
   requests,
   cash,
@@ -49,6 +53,9 @@ export default function HistoryView({
 }: {
   accounts: { id: string; slug: string; name: string }[];
   activeSlug: string;
+  preset: string;
+  from: string;
+  to: string;
   daily: DailyRow[];
   requests: ReqItem[];
   cash: CashItem[];
@@ -56,6 +63,30 @@ export default function HistoryView({
 }) {
   const { t } = useT();
   const router = useRouter();
+
+  const [customFrom, setCustomFrom] = useState(preset === "custom" ? from : "");
+  const [customTo, setCustomTo] = useState(preset === "custom" ? to : "");
+
+  // Build a statement URL preserving the chosen account.
+  const go = (params: { range?: string; from?: string; to?: string }) => {
+    const qs = new URLSearchParams({ account: activeSlug });
+    if (params.range) qs.set("range", params.range);
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    router.replace(`/retailer/history?${qs.toString()}`, { scroll: false });
+  };
+
+  const dateInputStyle: CSSProperties = {
+    display: "block",
+    width: "100%",
+    marginTop: 4,
+    padding: "7px 10px",
+    borderRadius: 8,
+    border: "1px solid var(--border-2)",
+    background: "var(--surface)",
+    color: "var(--ink)",
+    fontSize: 13.5,
+  };
 
   const fosBadge = (s: RequestFosStatus) =>
     s === "pending"
@@ -86,10 +117,57 @@ export default function HistoryView({
       <Segmented
         options={accounts.map((a) => ({ value: a.slug, label: a.name }))}
         value={activeSlug}
-        onChange={(slug) =>
-          router.replace(`/retailer/history?account=${slug}`, { scroll: false })
-        }
+        onChange={(slug) => {
+          const qs = new URLSearchParams({ account: slug, range: preset });
+          if (preset === "custom") {
+            qs.set("from", from);
+            qs.set("to", to);
+          }
+          router.replace(`/retailer/history?${qs.toString()}`, { scroll: false });
+        }}
       />
+
+      <div className="spacer" />
+      <div className="card" style={{ padding: "12px 16px" }}>
+        <Segmented
+          options={[
+            { value: "1d", label: t("hist.range.yesterday") },
+            { value: "7d", label: t("hist.range.7d") },
+            { value: "30d", label: t("hist.range.30d") },
+            { value: "all", label: t("hist.range.all") },
+          ]}
+          value={preset === "custom" ? "" : preset}
+          onChange={(r) => go({ range: r })}
+        />
+        <div style={{ display: "flex", gap: 10, alignItems: "end", marginTop: 10 }}>
+          <label style={{ flex: 1, fontSize: 12.5, color: "var(--ink-3)" }}>
+            {t("hist.range.from")}
+            <input
+              type="date"
+              style={dateInputStyle}
+              value={customFrom}
+              max={customTo || undefined}
+              onChange={(e) => {
+                setCustomFrom(e.target.value);
+                if (e.target.value && customTo) go({ range: "custom", from: e.target.value, to: customTo });
+              }}
+            />
+          </label>
+          <label style={{ flex: 1, fontSize: 12.5, color: "var(--ink-3)" }}>
+            {t("hist.range.to")}
+            <input
+              type="date"
+              style={dateInputStyle}
+              value={customTo}
+              min={customFrom || undefined}
+              onChange={(e) => {
+                setCustomTo(e.target.value);
+                if (customFrom && e.target.value) go({ range: "custom", from: customFrom, to: e.target.value });
+              }}
+            />
+          </label>
+        </div>
+      </div>
 
       <SectionLabel>{t("history.daily")}</SectionLabel>
       <div className="card" style={{ padding: "8px 16px 4px" }}>
