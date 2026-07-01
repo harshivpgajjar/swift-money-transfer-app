@@ -216,6 +216,7 @@ export async function processCashReportUpload(
     amount: e.amount,
     sheet_name: e.sheet_name,
     raw_name: e.raw_name,
+    portal: e.portal, // HT/PT from the sheet name (null for A2Z) — splits swift on the cash side
   }));
   const { error: entryErr } = await admin.from("cash_report_entries").insert(entryRows);
   if (entryErr) {

@@ -5,6 +5,9 @@ import type { AccountSlug } from "@/lib/types";
 export type CashReportEntry = {
   account_slug: AccountSlug;
   sheet_name: string;
+  /* HT or PT for swift-account rows (from the sheet name); null for A2Z. Splits the
+     merged swift account on the cash side, mirroring the EOD portal tag. */
+  portal: "HT" | "PT" | null;
   /* Empty when the row has no 10-digit phone — the import layer then
      resolves the retailer by name/alias (like the EOD importer). */
   phone: string;
@@ -214,12 +217,14 @@ export async function parseCashWorkbooks(
           error: `"${file.name}" has no HT/PT/A2Z sheet, and the account can't be inferred from the filename. Name the file (or a sheet) HT, PT or A2Z.`,
         };
       }
-      plan = wb.SheetNames.map((sheetName) => ({ sheetName, slug }));
+      const key = sheetKeyFromLabel(file.name) ?? undefined;
+      plan = wb.SheetNames.map((sheetName) => ({ sheetName, slug, key }));
     }
 
     for (const { sheetName, slug, key } of plan) {
+      const portal = key === "ht" ? "HT" : key === "pt" ? "PT" : null;
       const before = entries.length;
-      extractSheet(wb, sheetName, slug, entries, warnings);
+      extractSheet(wb, sheetName, slug, portal, entries, warnings);
       coveredAccounts.add(slug);
       if (key) matchedKeys.add(key);
       if (entries.length > before || key) {
@@ -271,6 +276,7 @@ function extractSheet(
   wb: XLSX.WorkBook,
   sheetName: string,
   accountSlug: AccountSlug,
+  portal: "HT" | "PT" | null,
   entries: CashReportEntry[],
   warnings: string[],
 ): void {
@@ -362,6 +368,7 @@ function extractSheet(
         entries.push({
           account_slug: accountSlug,
           sheet_name: sheetName,
+          portal,
           phone: phoneMatch ? phoneMatch[1] : "",
           raw_name: retailerCell,
           txn_date: date,
