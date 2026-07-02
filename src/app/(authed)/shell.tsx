@@ -47,7 +47,9 @@ function navFor(
       href: "/distributor/approvals",
       badge: approvalsBadge,
     },
+    { key: "daily", labelKey: "nav.daily", icon: "clock", href: "/distributor/daily" },
     { key: "outstanding", labelKey: "nav.outstanding", icon: "wallet", href: "/distributor/outstanding" },
+    { key: "late", labelKey: "nav.late", icon: "clock", href: "/distributor/late-charges" },
     { key: "users", labelKey: "nav.users", icon: "people", href: "/distributor/users" },
     { key: "reports", labelKey: "nav.reports", icon: "upload", href: "/distributor/reports" },
   ];

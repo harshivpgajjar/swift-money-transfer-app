@@ -306,6 +306,67 @@ export async function getActionBadge(distributorId: string, fosId?: string): Pro
   return rows.filter((r) => r.bucket === "attention" || r.bucket === "alert").length;
 }
 
+export type LateChargeRow = {
+  retailer_id: string;
+  full_name: string;
+  retailer_code: string | null;
+  account_name: string;
+  bucket: "attention" | "atrisk";
+  basis: number; // due-pending the tier was measured on
+  tier: string; // '<=10k' | '10-25k' | '>25k'
+  amount: number;
+};
+
+/* Late-payment charges written for one day (per account). Income view — these
+   do NOT touch retailer outstanding. Charged only on attention + at-risk
+   buckets; tiered ≤10k→25, 10-25k→50, >25k→0.3%. See apply_late_charges. */
+export async function getLateCharges(
+  distributorId: string,
+  date: string,
+): Promise<LateChargeRow[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("late_charge_summary", {
+    p_distributor: distributorId,
+    p_date: date,
+  });
+  if (error) throw error;
+  return (data ?? []).map((r: LateChargeRow) => ({
+    ...r,
+    basis: Number(r.basis),
+    amount: Number(r.amount),
+  }));
+}
+
+export type DailyUnpaidRow = {
+  retailer_id: string;
+  full_name: string;
+  retailer_code: string | null;
+  phone: string | null;
+  fos_id: string | null;
+  fos_name: string | null;
+  outstanding: number;
+  last_cash: string | null;
+  defaulted: boolean;
+};
+
+/* Retailers who owe money but have no cash recorded today (IST). Powers the
+   distributor's Daily report (cash side). FOS-scoped when fosId is given. */
+export async function getDailyCollectionReport(
+  distributorId: string,
+  fosId?: string,
+): Promise<DailyUnpaidRow[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("daily_collection_report", {
+    p_distributor: distributorId,
+    p_fos: fosId ?? null,
+  });
+  if (error) throw error;
+  return ((data ?? []) as DailyUnpaidRow[]).map((r) => ({
+    ...r,
+    outstanding: Number(r.outstanding),
+  }));
+}
+
 export async function getRetailerSummaries(
   distributorId: string,
   accountId: string,
